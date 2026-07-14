@@ -79,6 +79,7 @@ final class RecordingManager: ObservableObject {
     init() {
         print("🎙️ RecordingManager initialized")
         setupCoordinatorCallbacks()
+        coordinator.writeHeartbeat("launched")
         startRequestPolling()
     }
 

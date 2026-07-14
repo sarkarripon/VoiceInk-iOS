@@ -25,6 +25,16 @@ class KeyboardViewController: KeyboardInputViewController {
 
     // While set, the 0.5s poll must not overwrite transient message UI
     private var messageHoldUntil: Date?
+
+    // Keyboard extensions can't use NSExtensionContext.open to launch their
+    // containing app. When a launch attempt doesn't leave the host, keep an
+    // actionable retry state so the next tap tries again directly.
+    private var requiresAppLaunch = false
+
+    // The app writes a heartbeat about every 3.5s while it can service
+    // background requests. Anything older means we should launch immediately
+    // from the user's tap instead of waiting for a request timeout.
+    private let appHeartbeatFreshness: TimeInterval = 6.0
     
     deinit {
         recordingStatusTimer?.invalidate()
@@ -48,6 +58,7 @@ class KeyboardViewController: KeyboardInputViewController {
             guard let self else { return }
             self.pendingStartDeadline = nil
             self.messageHoldUntil = nil
+            self.requiresAppLaunch = false
             self.configureButtonForRecordingState()
         }
 
@@ -228,6 +239,12 @@ class KeyboardViewController: KeyboardInputViewController {
             return
         }
 
+        if requiresAppLaunch {
+            requiresAppLaunch = false
+            openMainAppForRecording()
+            return
+        }
+
         if coordinator.isRecording || pendingStopDeadline != nil {
             // Stop already requested - ignore re-taps while waiting
             guard pendingStopDeadline == nil else { return }
@@ -240,12 +257,18 @@ class KeyboardViewController: KeyboardInputViewController {
         } else if pendingStartDeadline != nil {
             // Start already requested - ignore re-taps while waiting
         } else {
-            // Ask the background-resident app to start recording. Only if it
-            // doesn't confirm within the deadline do we open the app (fallback
-            // for when iOS killed it).
-            coordinator.requestStartRecording()
-            pendingStartDeadline = Date().addingTimeInterval(2.0)
-            configureButtonForStartingState()
+            if coordinator.appHeartbeatAge > appHeartbeatFreshness {
+                // The app is not scheduled (force-quit, killed, or hibernated).
+                // Launch while this call is still tied to the button tap.
+                openMainAppForRecording()
+            } else {
+                // The background-resident app should be able to start without
+                // disrupting the host app. If it doesn't acknowledge the
+                // request, the timeout below launches it as a fallback.
+                coordinator.requestStartRecording()
+                pendingStartDeadline = Date().addingTimeInterval(2.0)
+                configureButtonForStartingState()
+            }
         }
     }
     
@@ -262,81 +285,44 @@ class KeyboardViewController: KeyboardInputViewController {
     
     private func openMainAppForRecording() {
         coordinator.appendDiag("KB: FALLBACK - opening main app (no confirmation, heartbeatAge=\(Int(coordinator.appHeartbeatAge)))")
-        // iOS keyboard extensions have severe limitations with audio recording
-        // The correct approach is to simply open the main app and let user record there
-        
-        // Try multiple approaches to open the main app
-        if let url = URL(string: "voiceink://record") {
-            // Method 1: Try extensionContext.open (primary method)
-            extensionContext?.open(url) { success in
-                if success {
-                    print("✅ Opened main app via extensionContext")
-                } else {
-                    print("❌ extensionContext.open failed, trying alternative methods")
-                    DispatchQueue.main.async {
-                        self.tryAlternativeURLOpening(url)
-                    }
-                }
-            }
-        } else {
-            // Fallback: Show message to user
+        guard let url = URL(string: "voiceink://record") else {
             showUserMessage()
+            return
+        }
+
+        configureButtonForStartingState()
+        messageHoldUntil = Date().addingTimeInterval(1.5)
+
+        // NSExtensionContext.open is not supported for custom keyboards.
+        // KeyboardKit's URL opener uses the modern responder-chain scene/app
+        // API that its KeyboardInputViewController provides for this purpose.
+        openUrl(url)
+
+        // If the keyboard is still visible, opening failed. Leave a persistent
+        // action the user can tap to retry instead of silently returning idle.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+            guard let self, self.viewIfLoaded?.window != nil,
+                  !self.coordinator.isRecording else { return }
+            self.coordinator.appendDiag("KB: main-app launch did not leave host")
+            self.showUserMessage()
         }
     }
-    
-    private func tryAlternativeURLOpening(_ url: URL) {
-        // Try UIApplication directly if available
-        if let sharedApp = UIApplication.value(forKeyPath: "sharedApplication") as? UIApplication {
-            if sharedApp.canOpenURL(url) {
-                sharedApp.open(url, options: [:]) { success in
-                    if success {
-                        print("✅ Opened main app via UIApplication.open")
-                    } else {
-                        print("❌ UIApplication.open failed")
-                        self.showUserMessage()
-                    }
-                }
-                return
-            }
-        }
-        
-        // Fallback: Try responder chain method
-        openURLViaResponderChain(url)
-    }
-    
-    private func openURLViaResponderChain(_ url: URL) {
-        // iOS 18 workaround: Use responder chain to open URL
-        var responder: UIResponder? = self
-        let selector = sel_registerName("openURL:")
-        
-        while let r = responder, !r.responds(to: selector) {
-            responder = r.next
-        }
-        
-        if let responder = responder {
-            _ = responder.perform(selector, with: url)
-            print("✅ Attempted to open main app via responder chain")
-            // Don't assume success since we can't get feedback from this method
-        } else {
-            print("❌ All URL opening methods failed")
-            showUserMessage()
-        }
-    }
-    
-    private func showUserMessage() {
-        // Last resort: Update button to show user should open main app manually
+
+    private func configureButtonForOpenAppState() {
         let appConfig = UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
         let appImage = UIImage(systemName: "app", withConfiguration: appConfig)
-        
+
         recordButton.setImage(appImage, for: .normal)
         recordButton.setTitle(" Open VoiceInk", for: .normal)
         recordButton.backgroundColor = UIColor.systemOrange
         recordButton.setTitleColor(.white, for: .normal)
         recordButton.tintColor = .white
-        
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-            self.configureButtonForIdleState()
-        }
+    }
+
+    private func showUserMessage() {
+        requiresAppLaunch = true
+        messageHoldUntil = nil
+        configureButtonForOpenAppState()
     }
     
     private func setupRecordingStatusMonitoring() {
@@ -386,18 +372,20 @@ class KeyboardViewController: KeyboardInputViewController {
             } else if isRecording {
                 // Main app confirmed recording started
                 self.pendingStartDeadline = nil
+                self.requiresAppLaunch = false
                 self.configureButtonForRecordingState()
             } else if let deadline = self.pendingStartDeadline {
                 if Date() > deadline {
                     // App never confirmed - it isn't running. Open it once.
                     self.pendingStartDeadline = nil
                     self.openMainAppForRecording()
-                    self.configureButtonForIdleState()
                 } else {
                     self.configureButtonForStartingState()
                 }
             } else if isProcessing {
                 self.configureButtonForProcessingState()
+            } else if self.requiresAppLaunch {
+                self.configureButtonForOpenAppState()
             } else {
                 self.configureButtonForIdleState()
             }
