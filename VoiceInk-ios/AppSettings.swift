@@ -79,10 +79,10 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(backgroundDictationEnabled, forKey: "backgroundDictationEnabled") }
     }
 
-    // Minutes of dictation inactivity before the background keep-alive (and
+    // Seconds of dictation inactivity before the background keep-alive (and
     // the microphone stream) shuts down to save battery. 0 = never.
-    @Published var keepAliveIdleMinutes: Int {
-        didSet { UserDefaults.standard.set(keepAliveIdleMinutes, forKey: "keepAliveIdleMinutes") }
+    @Published var keepAliveIdleSeconds: Int {
+        didSet { UserDefaults.standard.set(keepAliveIdleSeconds, forKey: "keepAliveIdleSeconds") }
     }
 
 
@@ -116,8 +116,14 @@ final class AppSettings: ObservableObject {
         // Background dictation (default: enabled)
         self.backgroundDictationEnabled = UserDefaults.standard.object(forKey: "backgroundDictationEnabled") as? Bool ?? true
 
-        // Idle hibernate (default: 10 minutes)
-        self.keepAliveIdleMinutes = UserDefaults.standard.object(forKey: "keepAliveIdleMinutes") as? Int ?? 10
+        // Idle hibernate (default: 10 minutes; migrate the old minutes-based key)
+        if let seconds = UserDefaults.standard.object(forKey: "keepAliveIdleSeconds") as? Int {
+            self.keepAliveIdleSeconds = seconds
+        } else if let minutes = UserDefaults.standard.object(forKey: "keepAliveIdleMinutes") as? Int {
+            self.keepAliveIdleSeconds = minutes * 60
+        } else {
+            self.keepAliveIdleSeconds = 600
+        }
 
     }
 

@@ -3,7 +3,16 @@ import SwiftData
 
 struct SettingsView: View {
     @StateObject private var settings = AppSettings.shared
-    
+
+    private var hibernateLabel: String {
+        let seconds = settings.keepAliveIdleSeconds
+        if seconds == 0 { return "Never" }
+        if seconds < 60 { return "\(seconds)s" }
+        let minutes = seconds / 60
+        let remainder = seconds % 60
+        return remainder == 0 ? "\(minutes) min" : "\(minutes)m \(remainder)s"
+    }
+
     var body: some View {
         List {
             Section(header: Text("Modes")) {
@@ -69,20 +78,20 @@ struct SettingsView: View {
                     HStack {
                         Text("Auto-Hibernate")
                         Spacer()
-                        Text(settings.keepAliveIdleMinutes == 0 ? "Never" : "\(settings.keepAliveIdleMinutes) min")
+                        Text(hibernateLabel)
                             .foregroundStyle(.secondary)
                     }
 
                     Slider(
                         value: Binding(
-                            get: { Double(settings.keepAliveIdleMinutes) },
-                            set: { settings.keepAliveIdleMinutes = Int($0) }
+                            get: { Double(settings.keepAliveIdleSeconds) },
+                            set: { settings.keepAliveIdleSeconds = Int($0) }
                         ),
-                        in: 0...60,
-                        step: 5
+                        in: 0...3600,
+                        step: 30
                     )
 
-                    Text("Shut down background dictation after this many minutes without recording, to save battery. The next keyboard Record tap opens the app once to re-arm it. 0 = stay armed forever.")
+                    Text("Shut down background dictation (and the mic indicator) after this long without recording, to save battery. The next keyboard Record tap opens the app once to re-arm it. 0 = stay armed forever.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

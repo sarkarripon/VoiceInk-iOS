@@ -17,8 +17,6 @@ final class BackgroundKeepAliveService {
 
     private var engine = AVAudioEngine()
     private var player = AVAudioPlayerNode()
-    private var graphBuilt = false
-    private var tapInstalled = false
     private var interruptionObserver: NSObjectProtocol?
     private var mediaResetObserver: NSObjectProtocol?
     private var configChangeObserver: NSObjectProtocol?
@@ -30,10 +28,12 @@ final class BackgroundKeepAliveService {
     /// suspends the app; the keyboard's open-app fallback re-arms it.
     private var idleTimer: Timer?
 
-    // Live microphone capture. iOS forbids STARTING mic input from the
-    // background, so the input tap runs from foreground on (orange indicator
-    // stays on while the app is alive) and "recording" just starts writing
-    // the already-flowing buffers to a file.
+    // Live microphone capture. iOS refuses to START mic input I/O from the
+    // background (CoreAudio 'wht!' 2003329396) even when the recording
+    // session has stayed active — verified on device. So the input tap runs
+    // from foreground on (orange indicator on while armed) and "recording"
+    // just starts writing the already-flowing buffers to a file. The idle
+    // hibernate timer bounds how long the mic stays hot.
     private let captureQueue = DispatchQueue(label: "voiceink.capture")
     private var captureFile: AVAudioFile? // touch only on captureQueue
     private var captureURL: URL?
@@ -45,9 +45,9 @@ final class BackgroundKeepAliveService {
 
     /// Start silent playback so iOS keeps the process running in the background.
     /// Also acts as a repair path: calling it while marked active but with a
-    /// dead engine restarts everything. The microphone is NOT opened here —
-    /// input only runs while an actual recording is in progress, so the orange
-    /// indicator stays off when idle.
+    /// dead engine restarts everything. The microphone opens HERE, from the
+    /// foreground — background mic starts are impossible, so the input must
+    /// already be flowing when the keyboard asks to record.
     func start() {
         guard !(isActive && engine.isRunning) else { return }
 
@@ -57,13 +57,7 @@ final class BackgroundKeepAliveService {
             try AudioSessionManager.shared.activateSessionForRecording()
             AudioSessionManager.shared.isKeepAliveActive = true
 
-            buildGraphIfNeeded()
-            installTapIfNeeded()
-            player.stop() // clear any stale scheduled buffers
-            scheduleSilence()
-
-            try engine.start()
-            player.play()
+            try rebuildEngine(withInput: true)
 
             observeInterruptions()
             observeMediaServicesReset()
@@ -101,17 +95,17 @@ final class BackgroundKeepAliveService {
         idleTimer?.invalidate()
         idleTimer = nil
 
-        let minutes = AppSettings.shared.keepAliveIdleMinutes
-        guard isActive, minutes > 0 else { return }
+        let seconds = AppSettings.shared.keepAliveIdleSeconds
+        guard isActive, seconds > 0 else { return }
 
-        idleTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(minutes * 60), repeats: false) { _ in
+        idleTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(seconds), repeats: false) { _ in
             Task { @MainActor in
                 let service = BackgroundKeepAliveService.shared
                 guard service.isActive, !service.isCapturing else {
                     service.noteActivity() // recording in flight - re-arm
                     return
                 }
-                AppGroupCoordinator.shared.appendDiag("APP: hibernating after \(minutes)min idle")
+                AppGroupCoordinator.shared.appendDiag("APP: hibernating after \(seconds)s idle")
                 AppGroupCoordinator.shared.writeHeartbeat("hibernated")
                 service.stop()
             }
@@ -153,41 +147,54 @@ final class BackgroundKeepAliveService {
 
     // MARK: - Private
 
-    private func buildGraphIfNeeded() {
-        guard !graphBuilt else { return }
+    /// Tear down the current engine and bring up a fresh one. `withInput`
+    /// decides whether the mic is part of the graph — touching `inputNode`
+    /// at all is what turns the orange indicator on, so the idle keep-alive
+    /// graph must never reference it.
+    private func rebuildEngine(withInput: Bool) throws {
+        engine.stop()
+        removeConfigurationObserver() // bound to the old engine instance
+
+        engine = AVAudioEngine()
+        player = AVAudioPlayerNode()
         engine.attach(player)
         engine.connect(player, to: engine.mainMixerNode, format: silenceFormat)
         engine.mainMixerNode.outputVolume = 0
-        graphBuilt = true
-    }
 
-    private func installTapIfNeeded() {
-        guard !tapInstalled else { return }
-        let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0 else { return }
-
-        input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
-            guard let self else { return }
-            self.captureQueue.async {
-                guard let file = self.captureFile else { return } // idle: discard
-                do {
-                    try file.write(from: buffer)
-                } catch {
-                    print("⚠️ Capture write failed: \(error.localizedDescription)")
+        if withInput {
+            let input = engine.inputNode
+            let format = input.outputFormat(forBus: 0)
+            guard format.sampleRate > 0 else {
+                throw NSError(domain: "com.sarkarripon.VoiceInk.capture", code: 2, userInfo: [
+                    NSLocalizedDescriptionKey: "Microphone input format unavailable"
+                ])
+            }
+            input.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
+                guard let self else { return }
+                self.captureQueue.async {
+                    guard let file = self.captureFile else { return } // not writing yet: discard
+                    do {
+                        try file.write(from: buffer)
+                    } catch {
+                        print("⚠️ Capture write failed: \(error.localizedDescription)")
+                    }
                 }
             }
         }
-        tapInstalled = true
+
+        scheduleSilence()
+        try engine.start()
+        player.play()
+        observeConfigurationChanges()
     }
 
     // MARK: - Capture API (used for keyboard-triggered background recording)
 
     /// Begin writing the live input to a WAV file. Works in the background
-    /// because the input stream is already running.
+    /// because the input stream is already running (started in foreground).
     func startCapture(to url: URL) throws {
         let format = engine.inputNode.outputFormat(forBus: 0)
-        guard engine.isRunning, format.sampleRate > 0 else {
+        guard isActive, engine.isRunning, format.sampleRate > 0 else {
             throw NSError(domain: "com.sarkarripon.VoiceInk.capture", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "Capture engine is not running"
             ])
@@ -289,12 +296,8 @@ final class BackgroundKeepAliveService {
                 guard let self, self.isActive else { return }
                 print("🌙 Media services reset - rebuilding keep-alive engine")
                 self.removeObservers() // config observer is bound to the old engine
-                self.engine = AVAudioEngine()
-                self.player = AVAudioPlayerNode()
-                self.graphBuilt = false
-                self.tapInstalled = false
                 self.isActive = false
-                self.start()
+                self.start() // rebuilds the engine from scratch (playback-only)
             }
         }
     }
@@ -315,6 +318,13 @@ final class BackgroundKeepAliveService {
                 self?.ensureRunning()
             }
         }
+    }
+
+    private func removeConfigurationObserver() {
+        if let configChangeObserver {
+            NotificationCenter.default.removeObserver(configChangeObserver)
+        }
+        configChangeObserver = nil
     }
 
     private func removeObservers() {

@@ -97,9 +97,11 @@ struct VoiceInk_iosApp: App {
         switch url.host {
         case "record":
             print("🔗 URL scheme triggered: open app for recording")
-            // Automatically start recording flow when opened from keyboard
+            // Opened from the keyboard fallback: mark the recording as
+            // keyboard-initiated so the transcript is published back for
+            // insertion once the user returns to the host app
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                self.recordingManager.startRecordingFlow()
+                self.recordingManager.startRecordingFlow(fromKeyboard: true)
             }
             print("📱 App opened via keyboard extension - starting recording")
         default:
