@@ -74,6 +74,17 @@ final class AppSettings: ObservableObject {
         didSet { UserDefaults.standard.set(audioSessionTimeoutSeconds, forKey: "audioSessionTimeoutSeconds") }
     }
 
+    // Keep the app alive in the background so the keyboard can record without opening it
+    @Published var backgroundDictationEnabled: Bool {
+        didSet { UserDefaults.standard.set(backgroundDictationEnabled, forKey: "backgroundDictationEnabled") }
+    }
+
+    // Minutes of dictation inactivity before the background keep-alive (and
+    // the microphone stream) shuts down to save battery. 0 = never.
+    @Published var keepAliveIdleMinutes: Int {
+        didSet { UserDefaults.standard.set(keepAliveIdleMinutes, forKey: "keepAliveIdleMinutes") }
+    }
+
 
     private init() {
         // Load modes
@@ -101,6 +112,12 @@ final class AppSettings: ObservableObject {
         
         // Load audio session timeout (default: 90 seconds)
         self.audioSessionTimeoutSeconds = UserDefaults.standard.object(forKey: "audioSessionTimeoutSeconds") as? Int ?? 90
+
+        // Background dictation (default: enabled)
+        self.backgroundDictationEnabled = UserDefaults.standard.object(forKey: "backgroundDictationEnabled") as? Bool ?? true
+
+        // Idle hibernate (default: 10 minutes)
+        self.keepAliveIdleMinutes = UserDefaults.standard.object(forKey: "keepAliveIdleMinutes") as? Int ?? 10
 
     }
 

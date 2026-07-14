@@ -12,10 +12,20 @@ import SwiftData
 struct VoiceInk_iosApp: App {
     @State private var hasCompletedOnboarding = UserDefaults.standard.bool(forKey: "hasCompletedOnboarding")
     @StateObject private var recordingManager = RecordingManager()
-    
+    @Environment(\.scenePhase) private var scenePhase
+
     init() {
+        // Discard any stale keyboard request flags first (a launch-time start
+        // is already represented by the voiceink://record URL open, so
+        // honoring the flag here would double-start)
+        _ = AppGroupCoordinator.shared.checkAndConsumeStartRecordingFlag()
+        _ = AppGroupCoordinator.shared.checkAndConsumeStopRecordingFlag()
+
         // Clear any stale recording state on app launch
         AppGroupCoordinator.shared.updateRecordingState(false)
+        AppGroupCoordinator.shared.updateProcessingState(false)
+        AppGroupCoordinator.shared.writeDiagMarker()
+        AppGroupCoordinator.shared.appendDiag("APP: launched")
         print("🧹 Cleared stale recording state on app launch")
     }
     
@@ -35,20 +45,50 @@ struct VoiceInk_iosApp: App {
 
     var body: some Scene {
         WindowGroup {
-            if hasCompletedOnboarding {
-                ContentView()
-                    .environmentObject(recordingManager)
-                    .onOpenURL { url in
-                        handleURL(url)
-                    }
-            } else {
-                OnboardingView(isOnboardingComplete: $hasCompletedOnboarding)
-                    .onOpenURL { url in
-                        handleURL(url)
-                    }
+            Group {
+                if hasCompletedOnboarding {
+                    ContentView()
+                        .environmentObject(recordingManager)
+                        .onOpenURL { url in
+                            handleURL(url)
+                        }
+                } else {
+                    OnboardingView(isOnboardingComplete: $hasCompletedOnboarding)
+                        .onOpenURL { url in
+                            handleURL(url)
+                        }
+                }
+            }
+            .onAppear {
+                // Attach the SwiftData context so keyboard-initiated stops
+                // work regardless of which view is on screen
+                recordingManager.modelContext = sharedModelContainer.mainContext
+            }
+            .onChange(of: scenePhase) { _, newPhase in
+                handleScenePhaseChange(newPhase)
             }
         }
         .modelContainer(sharedModelContainer)
+    }
+
+    private func handleScenePhaseChange(_ phase: ScenePhase) {
+        AppGroupCoordinator.shared.appendDiag("APP: scenePhase -> \(phase)")
+        switch phase {
+        case .active:
+            // Start the silent keep-alive engine while foregrounded — iOS can
+            // refuse audio session activation once already in the background,
+            // so it must be running BEFORE the app is backgrounded. It then
+            // keeps the process alive so the keyboard can trigger recording
+            // via Darwin notifications without opening the app.
+            if AppSettings.shared.backgroundDictationEnabled && hasCompletedOnboarding {
+                BackgroundKeepAliveService.shared.start()
+            } else {
+                BackgroundKeepAliveService.shared.stop()
+            }
+        default:
+            // Keep the engine running across .inactive/.background
+            break
+        }
     }
     
     private func handleURL(_ url: URL) {

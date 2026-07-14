@@ -69,9 +69,14 @@ final class AudioRecorder: NSObject, ObservableObject {
         meterTimer = nil
         isRecording = false
         levelsHistory.removeAll()
-        
+
         // Schedule session deactivation with timeout instead of immediate deactivation
         sessionManager.scheduleDeactivation()
+
+        // Hand the session back to the mixable keep-alive configuration
+        if sessionManager.isKeepAliveActive {
+            BackgroundKeepAliveService.shared.reconfigureForIdle()
+        }
     }
 
     func discard() {
@@ -87,9 +92,13 @@ final class AudioRecorder: NSObject, ObservableObject {
         }
         currentRecordingURL = nil
         currentDuration = 0
-        
+
         // Schedule session deactivation after discard as well
         sessionManager.scheduleDeactivation()
+
+        if sessionManager.isKeepAliveActive {
+            BackgroundKeepAliveService.shared.reconfigureForIdle()
+        }
     }
 
     static func recordingsDirectory() -> URL {

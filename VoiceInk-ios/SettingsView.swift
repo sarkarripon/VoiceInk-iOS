@@ -49,6 +49,47 @@ struct SettingsView: View {
             
             Section(header: Text("Audio Settings")) {
                 VStack(alignment: .leading, spacing: 8) {
+                    Toggle("Background Dictation", isOn: $settings.backgroundDictationEnabled)
+                        .onChange(of: settings.backgroundDictationEnabled) { _, enabled in
+                            if enabled {
+                                BackgroundKeepAliveService.shared.start()
+                            } else {
+                                BackgroundKeepAliveService.shared.stop()
+                            }
+                        }
+
+                    Text("Keeps VoiceInk running in the background (via silent audio and a live mic stream) so the keyboard's Record button works without opening the app. Uses more battery and keeps the mic indicator on.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.vertical, 4)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Auto-Hibernate")
+                        Spacer()
+                        Text(settings.keepAliveIdleMinutes == 0 ? "Never" : "\(settings.keepAliveIdleMinutes) min")
+                            .foregroundStyle(.secondary)
+                    }
+
+                    Slider(
+                        value: Binding(
+                            get: { Double(settings.keepAliveIdleMinutes) },
+                            set: { settings.keepAliveIdleMinutes = Int($0) }
+                        ),
+                        in: 0...60,
+                        step: 5
+                    )
+
+                    Text("Shut down background dictation after this many minutes without recording, to save battery. The next keyboard Record tap opens the app once to re-arm it. 0 = stay armed forever.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.vertical, 4)
+
+                VStack(alignment: .leading, spacing: 8) {
                     HStack {
                         Text("Session Timeout")
                         Spacer()

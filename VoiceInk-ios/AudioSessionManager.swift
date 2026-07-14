@@ -16,6 +16,10 @@ final class AudioSessionManager: ObservableObject {
     
     @Published var isSessionActive: Bool = false
     @Published var timeoutRemaining: TimeInterval = 0
+
+    /// While the background keep-alive engine is running, the session must
+    /// never be deactivated or the app gets suspended
+    var isKeepAliveActive: Bool = false
     
     private var deactivationTimer: Timer?
     private let settings = AppSettings.shared
@@ -24,26 +28,41 @@ final class AudioSessionManager: ObservableObject {
     
     // MARK: - Public Interface
     
-    /// Activates audio session for recording with optimal settings
+    /// Activates audio session for recording with optimal settings.
+    /// MUST be non-mixable AND must never be re-configured from the
+    /// background: iOS refuses BOTH mic start on mixable sessions and any
+    /// category change/activation from the background (OSStatus 560557684
+    /// '!int'). So the keep-alive holds this exact configuration from
+    /// foreground onward, and this call becomes a no-op while it does.
     func activateSessionForRecording() throws {
         let audioSession = AVAudioSession.sharedInstance()
-        
+        let options: AVAudioSession.CategoryOptions = [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP]
+
+        // Already configured and active (keep-alive holds it): touch nothing,
+        // touching the session in the background would throw '!int'
+        if isSessionActive,
+           audioSession.category == .playAndRecord,
+           audioSession.categoryOptions == options {
+            cancelScheduledDeactivation()
+            return
+        }
+
         do {
             // Configure session for recording with background support
             try audioSession.setCategory(
                 .playAndRecord,
                 mode: .spokenAudio,
-                options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP, .mixWithOthers]
+                options: options
             )
-            
+
             // Activate the session
             try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
-            
+
             isSessionActive = true
             cancelScheduledDeactivation()
-            
+
             print("🎙️ Audio session activated for recording")
-            
+
         } catch let error as NSError {
             print("⚠️ Audio session activation failed: \(error.localizedDescription) (Code: \(error.code))")
             throw error
@@ -95,7 +114,11 @@ final class AudioSessionManager: ObservableObject {
     /// Immediately deactivates the session
     func deactivateSession() {
         cancelScheduledDeactivation()
-        
+
+        guard !isKeepAliveActive else {
+            print("🌙 Skipping session deactivation - keep-alive active")
+            return
+        }
         guard isSessionActive else { return }
         
         do {

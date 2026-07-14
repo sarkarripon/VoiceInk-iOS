@@ -13,6 +13,18 @@ class KeyboardViewController: KeyboardInputViewController {
     var recordButton: UIButton!
     private let coordinator = AppGroupCoordinator.shared
     private var recordingStatusTimer: Timer?
+
+    // Set when we've asked the background app to start recording and are
+    // waiting for it to confirm; if it never does, the app isn't running
+    // and we fall back to opening it once.
+    private var pendingStartDeadline: Date?
+
+    // Set when we've asked for a stop and await confirmation; self-heals to
+    // idle if the app never confirms (no app-open fallback on stop).
+    private var pendingStopDeadline: Date?
+
+    // While set, the 0.5s poll must not overwrite transient message UI
+    private var messageHoldUntil: Date?
     
     deinit {
         recordingStatusTimer?.invalidate()
@@ -23,6 +35,41 @@ class KeyboardViewController: KeyboardInputViewController {
         super.viewDidLoad()
         setupKeyboard()
         setupRecordingStatusMonitoring()
+
+        // Insert the transcript the moment the main app publishes it
+        coordinator.onTranscriptionReady = { [weak self] in
+            self?.insertPendingTranscriptIfAvailable()
+            self?.updateButtonAppearanceBasedOnState()
+        }
+
+        // Positive acks via Darwin notifications: instant confirmation that
+        // works even when the shared container is unreadable on our side
+        coordinator.onRecordingDidStart = { [weak self] in
+            guard let self else { return }
+            self.pendingStartDeadline = nil
+            self.messageHoldUntil = nil
+            self.configureButtonForRecordingState()
+        }
+
+        coordinator.onRecordingDidStop = { [weak self] in
+            guard let self else { return }
+            self.pendingStopDeadline = nil
+            self.configureButtonForProcessingState()
+        }
+
+        coordinator.onStartRecordingFailed = { [weak self] in
+            guard let self else { return }
+            self.pendingStartDeadline = nil
+            self.pendingStopDeadline = nil
+            self.showTransientMessage(" Mic unavailable", symbol: "mic.slash")
+        }
+
+        // Pick up any transcript that finished while the keyboard was closed
+        if hasFullAccess {
+            insertPendingTranscriptIfAvailable()
+        } else {
+            configureButtonForNoAccessState()
+        }
     }
     
     private func setupKeyboard() {
@@ -174,13 +221,31 @@ class KeyboardViewController: KeyboardInputViewController {
         let impactFeedback = UIImpactFeedbackGenerator(style: .medium)
         impactFeedback.impactOccurred()
         
-        if coordinator.isRecording {
-            // Stop recording
+        // Without Full Access the shared container is silently isolated and
+        // the pipeline cannot work - tell the user instead of misbehaving
+        guard hasFullAccess else {
+            configureButtonForNoAccessState()
+            return
+        }
+
+        if coordinator.isRecording || pendingStopDeadline != nil {
+            // Stop already requested - ignore re-taps while waiting
+            guard pendingStopDeadline == nil else { return }
+            // Stop recording; the main app will transcribe and publish the text
             coordinator.requestStopRecording()
-            updateButtonAppearanceBasedOnState()
+            pendingStopDeadline = Date().addingTimeInterval(2.0)
+            configureButtonForProcessingState()
+        } else if coordinator.isProcessing && coordinator.processingAge < 120 {
+            // Transcription in flight - ignore taps
+        } else if pendingStartDeadline != nil {
+            // Start already requested - ignore re-taps while waiting
         } else {
-            // Start recording by opening main app
-            openMainAppForRecording()
+            // Ask the background-resident app to start recording. Only if it
+            // doesn't confirm within the deadline do we open the app (fallback
+            // for when iOS killed it).
+            coordinator.requestStartRecording()
+            pendingStartDeadline = Date().addingTimeInterval(2.0)
+            configureButtonForStartingState()
         }
     }
     
@@ -196,6 +261,7 @@ class KeyboardViewController: KeyboardInputViewController {
     }
     
     private func openMainAppForRecording() {
+        coordinator.appendDiag("KB: FALLBACK - opening main app (no confirmation, heartbeatAge=\(Int(coordinator.appHeartbeatAge)))")
         // iOS keyboard extensions have severe limitations with audio recording
         // The correct approach is to simply open the main app and let user record there
         
@@ -284,22 +350,115 @@ class KeyboardViewController: KeyboardInputViewController {
     }
     
     private func updateButtonAppearanceBasedOnState() {
-        let isRecording = coordinator.isRecording
-        
         DispatchQueue.main.async { [weak self] in
             guard let self = self, let button = self.recordButton else { return }
-            
-            if isRecording {
-                // Configure for recording state
+
+            // Full Access off: pipeline can't work, show the persistent hint
+            // (this gate must live here too or the poll would clobber it)
+            guard self.hasFullAccess else {
+                self.pendingStartDeadline = nil
+                self.pendingStopDeadline = nil
+                self.configureButtonForNoAccessState()
+                button.layer.cornerRadius = button.frame.height / 2
+                return
+            }
+
+            // Don't clobber a transient message the user should read
+            if let holdUntil = self.messageHoldUntil {
+                if Date() < holdUntil { return }
+                self.messageHoldUntil = nil
+            }
+
+            // Insert any transcript the main app has published
+            self.insertPendingTranscriptIfAvailable()
+
+            let isRecording = self.coordinator.isRecording
+            let isProcessing = self.coordinator.isProcessing
+
+            if let deadline = self.pendingStopDeadline {
+                // Waiting for stop confirmation; self-heal if it never comes
+                if Date() > deadline {
+                    self.pendingStopDeadline = nil
+                    self.configureButtonForIdleState()
+                } else {
+                    self.configureButtonForProcessingState()
+                }
+            } else if isRecording {
+                // Main app confirmed recording started
+                self.pendingStartDeadline = nil
                 self.configureButtonForRecordingState()
+            } else if let deadline = self.pendingStartDeadline {
+                if Date() > deadline {
+                    // App never confirmed - it isn't running. Open it once.
+                    self.pendingStartDeadline = nil
+                    self.openMainAppForRecording()
+                    self.configureButtonForIdleState()
+                } else {
+                    self.configureButtonForStartingState()
+                }
+            } else if isProcessing {
+                self.configureButtonForProcessingState()
             } else {
-                // Configure for idle state
                 self.configureButtonForIdleState()
             }
-            
+
             // Ensure capsule shape is maintained
             button.layer.cornerRadius = button.frame.height / 2
         }
+    }
+
+    private func configureButtonForNoAccessState() {
+        let config = UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
+        let image = UIImage(systemName: "lock.open", withConfiguration: config)
+
+        recordButton.setImage(image, for: .normal)
+        recordButton.setTitle(" Enable Full Access", for: .normal)
+        recordButton.backgroundColor = UIColor.systemOrange
+        recordButton.setTitleColor(.white, for: .normal)
+        recordButton.tintColor = .white
+    }
+
+    private func showTransientMessage(_ title: String, symbol: String) {
+        let config = UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
+        let image = UIImage(systemName: symbol, withConfiguration: config)
+
+        recordButton.setImage(image, for: .normal)
+        recordButton.setTitle(title, for: .normal)
+        recordButton.backgroundColor = UIColor.systemOrange
+        recordButton.setTitleColor(.white, for: .normal)
+        recordButton.tintColor = .white
+
+        messageHoldUntil = Date().addingTimeInterval(2.5)
+    }
+
+    private func insertPendingTranscriptIfAvailable() {
+        guard let text = coordinator.consumePendingTranscript() else { return }
+        textDocumentProxy.insertText(text)
+
+        let notificationFeedback = UINotificationFeedbackGenerator()
+        notificationFeedback.notificationOccurred(.success)
+    }
+
+    private func configureButtonForStartingState() {
+        let config = UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
+        let image = UIImage(systemName: "mic.badge.plus", withConfiguration: config)
+
+        recordButton.setImage(image, for: .normal)
+        recordButton.setTitle(" Starting…", for: .normal)
+        recordButton.backgroundColor = UIColor.systemGray
+        recordButton.setTitleColor(.white, for: .normal)
+        recordButton.tintColor = .white
+    }
+
+    private func configureButtonForProcessingState() {
+        let config = UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
+        let image = UIImage(systemName: "waveform", withConfiguration: config)
+
+        recordButton.setImage(image, for: .normal)
+        recordButton.setTitle(" Transcribing…", for: .normal)
+        recordButton.backgroundColor = UIColor.systemGray
+        recordButton.setTitleColor(.white, for: .normal)
+        recordButton.tintColor = .white
     }
     
     override func textWillChange(_ textInput: UITextInput?) {
