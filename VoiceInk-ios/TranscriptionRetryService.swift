@@ -25,11 +25,12 @@ class TranscriptionRetryService {
         let provider = await settings.effectiveTranscriptionProvider
         let apiKey = await settings.apiKey(for: provider)
         let model = await settings.effectiveTranscriptionModel
-        
+        let language = await settings.effectiveTranscriptionLanguage
+
         guard !apiKey.isEmpty else {
             throw TranscriptionError.noApiKey
         }
-        
+
         let fileURL = URL(fileURLWithPath: audioPath)
         let transcriptionService = TranscriptionServiceFactory.service(for: provider)
         let rawText = try await transcriptionService.transcribeAudioFile(
@@ -37,7 +38,7 @@ class TranscriptionRetryService {
             apiKey: apiKey,
             model: model,
             fileURL: fileURL,
-            language: nil
+            language: language
         )
         
         // Clean up transcription

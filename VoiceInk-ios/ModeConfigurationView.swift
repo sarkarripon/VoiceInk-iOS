@@ -73,6 +73,12 @@ struct ModeConfigurationView: View {
                             .foregroundColor(.secondary)
                     }
                 }
+
+                Picker("Language", selection: $mode.transcriptionLanguage) {
+                    ForEach(TranscriptionLanguage.all) { language in
+                        Text(language.name).tag(language.code)
+                    }
+                }
             }
             
             Section(header: Text("Post-processing"), 

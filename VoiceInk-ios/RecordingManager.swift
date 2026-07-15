@@ -372,7 +372,8 @@ final class RecordingManager: ObservableObject {
                     .appendingPathComponent("Recordings")
                 let fileURL = recordingsDir.appendingPathComponent(audioFileName)
                 let service = TranscriptionServiceFactory.service(for: provider)
-                let rawText = try await service.transcribeAudioFile(apiBaseURL: provider.baseURL, apiKey: apiKey, model: model, fileURL: fileURL, language: nil)
+                let language = settings.effectiveTranscriptionLanguage
+                let rawText = try await service.transcribeAudioFile(apiBaseURL: provider.baseURL, apiKey: apiKey, model: model, fileURL: fileURL, language: language)
                 
                 // Clean up transcription
                 let cleanedText = rawText

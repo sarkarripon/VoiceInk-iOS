@@ -110,7 +110,11 @@ struct ModeRowView: View {
                     Text("Transcription: \(mode.transcriptionModel)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    
+
+                    Label(TranscriptionLanguage.displayName(for: mode.transcriptionLanguage), systemImage: "globe")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+
                     if mode.isPostProcessingEnabled {
                         Text("Post-processing: \(mode.postProcessingModel)")
                             .font(.caption)

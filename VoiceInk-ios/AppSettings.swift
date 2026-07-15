@@ -233,6 +233,18 @@ final class AppSettings: ObservableObject {
         }
     }
     
+    /// Get the effective transcription language code (from selected mode or
+    /// first mode); nil means automatic detection.
+    var effectiveTranscriptionLanguage: String? {
+        if let selectedMode = selectedMode {
+            return selectedMode.transcriptionLanguage
+        } else if let firstMode = modes.first {
+            return firstMode.transcriptionLanguage
+        } else {
+            return nil
+        }
+    }
+
     /// Get the effective post-processing provider (from selected mode or first mode)
     var effectivePostProcessingProvider: Provider {
         if let selectedMode = selectedMode {

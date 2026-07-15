@@ -7,16 +7,20 @@ struct Mode: Identifiable, Codable {
     // Transcription settings
     var transcriptionProvider: Provider
     var transcriptionModel: String
-    
+    /// ISO 639-1 language code to force, or nil for automatic detection.
+    /// Optional so modes stored before this field decode as nil (Auto).
+    var transcriptionLanguage: String?
+
     // Post-processing settings
     var isPostProcessingEnabled: Bool
     var postProcessingProvider: Provider
     var postProcessingModel: String
     var promptTemplate: PromptTemplate
     
-    init(name: String, 
+    init(name: String,
          transcriptionProvider: Provider = .groq,
          transcriptionModel: String? = nil,
+         transcriptionLanguage: String? = nil,
          isPostProcessingEnabled: Bool = false,
          postProcessingProvider: Provider = .groq,
          postProcessingModel: String? = nil,
@@ -25,6 +29,7 @@ struct Mode: Identifiable, Codable {
         self.name = name
         self.transcriptionProvider = transcriptionProvider
         self.transcriptionModel = transcriptionModel ?? transcriptionProvider.models(for: .transcription).first ?? "whisper-large-v3"
+        self.transcriptionLanguage = transcriptionLanguage
         self.isPostProcessingEnabled = isPostProcessingEnabled
         self.postProcessingProvider = postProcessingProvider
         self.postProcessingModel = postProcessingModel ?? postProcessingProvider.models(for: .postProcessing).first ?? "llama-3.1-8b-instant"
