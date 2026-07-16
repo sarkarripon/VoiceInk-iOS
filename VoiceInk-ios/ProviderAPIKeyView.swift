@@ -115,6 +115,7 @@ struct ProviderAPIKeyView: View {
                 if !entered.isEmpty { settings.setAPIKey(entered, for: provider) }
                 settings.setKeyVerified(true, for: provider)
                 editingKey = false
+                await ModelCatalog.shared.refresh(provider)
             }
         }
     }

@@ -81,7 +81,13 @@ enum Provider: String, CaseIterable, Codable, Identifiable {
                 "llama3.1-70b"
             ]
         case (.gemini, .transcription):
-            return []
+            // Fallback when the dynamic fetch hasn't run; Gemini transcribes
+            // with the same multimodal chat models.
+            return [
+                "gemini-3.5-flash",
+                "gemini-3.1-flash-lite",
+                "gemini-3.1-pro-preview"
+            ]
         case (.gemini, .postProcessing):
             return [
                 "gemini-2.0-flash",

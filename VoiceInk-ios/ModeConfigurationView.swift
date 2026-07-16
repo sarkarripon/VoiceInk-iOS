@@ -3,7 +3,8 @@ import SwiftUI
 struct ModeConfigurationView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var settings: AppSettings
-    
+    @StateObject private var catalog = ModelCatalog.shared
+
     @State private var mode: Mode
     @State private var isEditing: Bool
     @State private var selectedTemplateType: PromptTemplateType
@@ -29,7 +30,7 @@ struct ModeConfigurationView: View {
                 return true
             }
             // Other providers: Must have models for transcription AND be properly configured
-            return !provider.models(for: .transcription).isEmpty && settings.isKeyVerified(for: provider)
+            return !catalog.models(for: provider, type: .transcription).isEmpty && settings.isKeyVerified(for: provider)
         }
     }
     
@@ -41,7 +42,7 @@ struct ModeConfigurationView: View {
                 return true
             }
             // Other providers: Must have models for post-processing AND be properly configured
-            return !provider.models(for: .postProcessing).isEmpty && settings.isKeyVerified(for: provider)
+            return !catalog.models(for: provider, type: .postProcessing).isEmpty && settings.isKeyVerified(for: provider)
         }
     }
     
@@ -61,7 +62,7 @@ struct ModeConfigurationView: View {
                 
                 if mode.transcriptionProvider != .voiceink {
                     Picker("Model", selection: $mode.transcriptionModel) {
-                        ForEach(mode.transcriptionProvider.models(for: .transcription), id: \.self) { model in
+                        ForEach(modelOptions(for: mode.transcriptionProvider, type: .transcription, current: mode.transcriptionModel), id: \.self) { model in
                             Text(model).tag(model)
                         }
                     }
@@ -94,7 +95,7 @@ struct ModeConfigurationView: View {
                     
                     if mode.postProcessingProvider != .voiceink {
                         Picker("Model", selection: $mode.postProcessingModel) {
-                            ForEach(mode.postProcessingProvider.models(for: .postProcessing), id: \.self) { model in
+                            ForEach(modelOptions(for: mode.postProcessingProvider, type: .postProcessing, current: mode.postProcessingModel), id: \.self) { model in
                                 Text(model).tag(model)
                             }
                         }
@@ -136,28 +137,50 @@ struct ModeConfigurationView: View {
                          (selectedTemplateType == .custom && customPromptText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
             }
         }
-        .onChange(of: mode.transcriptionProvider) { _, _ in
+        .task {
+            // Refresh model lists from provider APIs for all verified providers
+            for provider in Provider.allCases where settings.isKeyVerified(for: provider) {
+                await catalog.refresh(provider)
+            }
+        }
+        .onChange(of: mode.transcriptionProvider) { _, newProvider in
             // Update model when provider changes
-            if mode.transcriptionProvider == .voiceink {
+            if newProvider == .voiceink {
                 mode.transcriptionModel = settings.voiceInkTranscriptionModel()
             } else {
-                let availableModels = mode.transcriptionProvider.models(for: .transcription)
-                if !availableModels.contains(mode.transcriptionModel) {
-                    mode.transcriptionModel = availableModels.first ?? ""
+                Task {
+                    await catalog.refresh(newProvider)
+                    let availableModels = catalog.models(for: newProvider, type: .transcription)
+                    if !availableModels.contains(mode.transcriptionModel) {
+                        mode.transcriptionModel = availableModels.first ?? ""
+                    }
                 }
             }
         }
-        .onChange(of: mode.postProcessingProvider) { _, _ in
+        .onChange(of: mode.postProcessingProvider) { _, newProvider in
             // Update model when provider changes
-            if mode.postProcessingProvider == .voiceink {
+            if newProvider == .voiceink {
                 mode.postProcessingModel = settings.voiceInkPostProcessingModel()
             } else {
-                let availableModels = mode.postProcessingProvider.models(for: .postProcessing)
-                if !availableModels.contains(mode.postProcessingModel) {
-                    mode.postProcessingModel = availableModels.first ?? ""
+                Task {
+                    await catalog.refresh(newProvider)
+                    let availableModels = catalog.models(for: newProvider, type: .postProcessing)
+                    if !availableModels.contains(mode.postProcessingModel) {
+                        mode.postProcessingModel = availableModels.first ?? ""
+                    }
                 }
             }
         }
+    }
+
+    /// Model list from the catalog, keeping the mode's saved model selectable
+    /// even if it no longer appears in the fetched list.
+    private func modelOptions(for provider: Provider, type: ModelType, current: String) -> [String] {
+        var models = catalog.models(for: provider, type: type)
+        if !current.isEmpty && !models.contains(current) {
+            models.insert(current, at: 0)
+        }
+        return models
     }
 }
 
