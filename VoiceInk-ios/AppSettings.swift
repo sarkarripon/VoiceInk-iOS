@@ -40,6 +40,10 @@ final class AppSettings: ObservableObject {
         didSet { saveAPIKey(deepgramAPIKey, forKey: "deepgramAPIKey") }
     }
 
+    @Published var assemblyAIAPIKey: String {
+        didSet { saveAPIKey(assemblyAIAPIKey, forKey: "assemblyAIAPIKey") }
+    }
+
     @Published var cerebrasAPIKey: String {
         didSet { saveAPIKey(cerebrasAPIKey, forKey: "cerebrasAPIKey") }
     }
@@ -59,6 +63,10 @@ final class AppSettings: ObservableObject {
 
     @Published var deepgramKeyVerified: Bool {
         didSet { UserDefaults.standard.set(deepgramKeyVerified, forKey: "deepgramKeyVerified") }
+    }
+
+    @Published var assemblyAIKeyVerified: Bool {
+        didSet { UserDefaults.standard.set(assemblyAIKeyVerified, forKey: "assemblyAIKeyVerified") }
     }
 
     @Published var cerebrasKeyVerified: Bool {
@@ -102,11 +110,13 @@ final class AppSettings: ObservableObject {
         self.groqAPIKey = AppSettings.loadAPIKey(forKey: "groqAPIKey")
         self.openAIAPIKey = AppSettings.loadAPIKey(forKey: "openAIAPIKey")
         self.deepgramAPIKey = AppSettings.loadAPIKey(forKey: "deepgramAPIKey")
+        self.assemblyAIAPIKey = AppSettings.loadAPIKey(forKey: "assemblyAIAPIKey")
         self.cerebrasAPIKey = AppSettings.loadAPIKey(forKey: "cerebrasAPIKey")
         self.geminiAPIKey = AppSettings.loadAPIKey(forKey: "geminiAPIKey")
         self.groqKeyVerified = UserDefaults.standard.bool(forKey: "groqKeyVerified")
         self.openAIKeyVerified = UserDefaults.standard.bool(forKey: "openAIKeyVerified")
         self.deepgramKeyVerified = UserDefaults.standard.bool(forKey: "deepgramKeyVerified")
+        self.assemblyAIKeyVerified = UserDefaults.standard.bool(forKey: "assemblyAIKeyVerified")
         self.cerebrasKeyVerified = UserDefaults.standard.bool(forKey: "cerebrasKeyVerified")
         self.geminiKeyVerified = UserDefaults.standard.bool(forKey: "geminiKeyVerified")
         
@@ -132,6 +142,7 @@ final class AppSettings: ObservableObject {
         case .groq: return groqAPIKey
         case .openai: return openAIAPIKey
         case .deepgram: return deepgramAPIKey
+        case .assemblyai: return assemblyAIAPIKey
         case .cerebras: return cerebrasAPIKey
         case .gemini: return geminiAPIKey
         case .local: return "local" // Local transcription doesn't need an API key
@@ -153,6 +164,10 @@ final class AppSettings: ObservableObject {
             deepgramAPIKey = key
             // Reset verification status when key changes
             if deepgramAPIKey != key { deepgramKeyVerified = false }
+        case .assemblyai:
+            assemblyAIAPIKey = key
+            // Reset verification status when key changes
+            if assemblyAIAPIKey != key { assemblyAIKeyVerified = false }
         case .cerebras:
             cerebrasAPIKey = key
             // Reset verification status when key changes
@@ -173,6 +188,7 @@ final class AppSettings: ObservableObject {
         case .groq: return groqKeyVerified && !groqAPIKey.isEmpty
         case .openai: return openAIKeyVerified && !openAIAPIKey.isEmpty
         case .deepgram: return deepgramKeyVerified && !deepgramAPIKey.isEmpty
+        case .assemblyai: return assemblyAIKeyVerified && !assemblyAIAPIKey.isEmpty
         case .cerebras: return cerebrasKeyVerified && !cerebrasAPIKey.isEmpty
         case .gemini: return geminiKeyVerified && !geminiAPIKey.isEmpty
         case .local: return LocalModelManager.shared.hasAvailableModel
@@ -185,6 +201,7 @@ final class AppSettings: ObservableObject {
         case .groq: groqKeyVerified = verified
         case .openai: openAIKeyVerified = verified
         case .deepgram: deepgramKeyVerified = verified
+        case .assemblyai: assemblyAIKeyVerified = verified
         case .cerebras: cerebrasKeyVerified = verified
         case .gemini: geminiKeyVerified = verified
         case .local: break // Local model status is handled by LocalModelManager
@@ -330,11 +347,13 @@ final class AppSettings: ObservableObject {
         groqKeyVerified = false
         openAIKeyVerified = false
         deepgramKeyVerified = false
+        assemblyAIKeyVerified = false
         cerebrasKeyVerified = false
         geminiKeyVerified = false
         UserDefaults.standard.removeObject(forKey: "groqKeyVerified")
         UserDefaults.standard.removeObject(forKey: "openAIKeyVerified")
         UserDefaults.standard.removeObject(forKey: "deepgramKeyVerified")
+        UserDefaults.standard.removeObject(forKey: "assemblyAIKeyVerified")
         UserDefaults.standard.removeObject(forKey: "cerebrasKeyVerified")
         UserDefaults.standard.removeObject(forKey: "geminiKeyVerified")
         
@@ -346,11 +365,13 @@ final class AppSettings: ObservableObject {
         groqAPIKey = ""
         openAIAPIKey = ""
         deepgramAPIKey = ""
+        assemblyAIAPIKey = ""
         cerebrasAPIKey = ""
         geminiAPIKey = ""
         _ = KeychainService.delete(key: "groqAPIKey")
         _ = KeychainService.delete(key: "openAIAPIKey")
         _ = KeychainService.delete(key: "deepgramAPIKey")
+        _ = KeychainService.delete(key: "assemblyAIAPIKey")
         _ = KeychainService.delete(key: "cerebrasAPIKey")
         _ = KeychainService.delete(key: "geminiAPIKey")
     }

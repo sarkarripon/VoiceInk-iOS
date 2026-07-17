@@ -9,6 +9,7 @@ enum Provider: String, CaseIterable, Codable, Identifiable {
     case groq = "Groq"
     case openai = "OpenAI"
     case deepgram = "Deepgram"
+    case assemblyai = "AssemblyAI"
     case cerebras = "Cerebras"
     case gemini = "Gemini"
     case local = "Local (Whisper)"
@@ -21,6 +22,7 @@ enum Provider: String, CaseIterable, Codable, Identifiable {
         case .groq: return URL(string: "https://api.groq.com/openai")!
         case .openai: return URL(string: "https://api.openai.com")!
         case .deepgram: return URL(string: "https://api.deepgram.com")!
+        case .assemblyai: return URL(string: "https://api.assemblyai.com")!
         case .cerebras: return URL(string: "https://api.cerebras.ai")!
         case .gemini: return URL(string: "https://generativelanguage.googleapis.com/v1beta/openai")!
         case .local: return URL(string: "http://localhost")! // Not used for local transcription
@@ -33,6 +35,7 @@ enum Provider: String, CaseIterable, Codable, Identifiable {
         case .groq: return URL(string: "https://console.groq.com/keys")!
         case .openai: return URL(string: "https://platform.openai.com/api-keys")!
         case .deepgram: return URL(string: "https://console.deepgram.com/project/keys")!
+        case .assemblyai: return URL(string: "https://www.assemblyai.com/app/api-keys")!
         case .cerebras: return URL(string: "https://cloud.cerebras.ai/platform")!
         case .gemini: return URL(string: "https://aistudio.google.com/app/apikey")!
         case .local: return URL(string: "https://github.com/ggerganov/whisper.cpp")! // Whisper.cpp GitHub page
@@ -73,6 +76,13 @@ enum Provider: String, CaseIterable, Codable, Identifiable {
             ]
         case (.deepgram, .postProcessing):
             return []
+        case (.assemblyai, .transcription):
+            return [
+                "universal-3-5-pro",
+                "universal-2"
+            ]
+        case (.assemblyai, .postProcessing):
+            return [] // AssemblyAI is transcription-only
         case (.cerebras, .transcription):
             return []
         case (.cerebras, .postProcessing):

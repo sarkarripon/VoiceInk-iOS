@@ -45,6 +45,7 @@
         <string>api.groq.com</string>
         <string>api.openai.com</string>
         <string>api.deepgram.com</string>
+        <string>api.assemblyai.com</string>
         <string>api.cerebras.ai</string>
         <string>generativelanguage.googleapis.com</string>
     </array>

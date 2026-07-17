@@ -68,7 +68,7 @@ final class ModelCatalog: ObservableObject {
                 let ids = try await fetchOpenAICompatibleModels(
                     url: provider.baseURL.appendingPathComponent("v1/models"), apiKey: apiKey)
                 store(ids.sorted(), for: provider, type: .postProcessing)
-            case .deepgram, .local, .voiceink:
+            case .deepgram, .assemblyai, .local, .voiceink:
                 break // No usable models endpoint; hardcoded lists stay.
             }
         } catch {
