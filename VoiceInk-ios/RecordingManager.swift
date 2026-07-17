@@ -373,7 +373,21 @@ final class RecordingManager: ObservableObject {
                 let fileURL = recordingsDir.appendingPathComponent(audioFileName)
                 let service = TranscriptionServiceFactory.service(for: provider)
                 let language = settings.effectiveTranscriptionLanguage
-                let rawText = try await service.transcribeAudioFile(apiBaseURL: provider.baseURL, apiKey: apiKey, model: model, fileURL: fileURL, language: language)
+
+                // Shrink the upload for cloud providers; local Whisper keeps the WAV
+                var uploadFileURL = fileURL
+                var temporaryUpload: URL? = nil
+                if provider != .local, let compressed = AudioUploadCompressor.compressForUpload(fileURL) {
+                    uploadFileURL = compressed
+                    temporaryUpload = compressed
+                }
+                defer {
+                    if let temporaryUpload {
+                        try? FileManager.default.removeItem(at: temporaryUpload)
+                    }
+                }
+
+                let rawText = try await service.transcribeAudioFile(apiBaseURL: provider.baseURL, apiKey: apiKey, model: model, fileURL: uploadFileURL, language: language)
                 
                 // Clean up transcription
                 let cleanedText = rawText

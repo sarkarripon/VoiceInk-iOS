@@ -33,11 +33,25 @@ class TranscriptionRetryService {
 
         let fileURL = URL(fileURLWithPath: audioPath)
         let transcriptionService = TranscriptionServiceFactory.service(for: provider)
+
+        // Shrink the upload for cloud providers; local Whisper keeps the WAV
+        var uploadFileURL = fileURL
+        var temporaryUpload: URL? = nil
+        if provider != .local, let compressed = AudioUploadCompressor.compressForUpload(fileURL) {
+            uploadFileURL = compressed
+            temporaryUpload = compressed
+        }
+        defer {
+            if let temporaryUpload {
+                try? FileManager.default.removeItem(at: temporaryUpload)
+            }
+        }
+
         let rawText = try await transcriptionService.transcribeAudioFile(
             apiBaseURL: provider.baseURL,
             apiKey: apiKey,
             model: model,
-            fileURL: fileURL,
+            fileURL: uploadFileURL,
             language: language
         )
         

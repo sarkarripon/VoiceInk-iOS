@@ -43,7 +43,7 @@ struct DeepgramTranscriptionService: TranscriptionService {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("Token \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("audio/wav", forHTTPHeaderField: "Content-Type")
+        request.setValue(Self.contentType(for: fileURL), forHTTPHeaderField: "Content-Type")
         
         // Read audio file data
         let audioData = try Data(contentsOf: fileURL)

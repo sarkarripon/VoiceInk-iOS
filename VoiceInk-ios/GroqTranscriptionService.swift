@@ -13,6 +13,19 @@ protocol TranscriptionService {
     func verifyAPIKey(apiBaseURL: URL, _ apiKey: String) async -> Bool
 }
 
+extension TranscriptionService {
+    static func contentType(for fileURL: URL) -> String {
+        switch fileURL.pathExtension.lowercased() {
+        case "m4a", "mp4": return "audio/mp4"
+        case "mp3": return "audio/mpeg"
+        case "aac": return "audio/aac"
+        case "flac": return "audio/flac"
+        case "ogg": return "audio/ogg"
+        default: return "audio/wav"
+        }
+    }
+}
+
 struct GroqTranscriptionService: TranscriptionService {
     // OpenAI-compatible APIs. Caller supplies baseURL and model.
 
@@ -46,7 +59,7 @@ struct GroqTranscriptionService: TranscriptionService {
         let filename = fileURL.lastPathComponent
         body.append("--\(boundary)\r\n".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"file\"; filename=\"\(filename)\"\r\n".data(using: .utf8)!)
-        body.append("Content-Type: audio/wav\r\n\r\n".data(using: .utf8)!)
+        body.append("Content-Type: \(Self.contentType(for: fileURL))\r\n\r\n".data(using: .utf8)!)
         body.append(fileData)
         body.append("\r\n".data(using: .utf8)!)
 
