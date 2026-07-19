@@ -6,11 +6,13 @@
 //
 
 import UIKit
+import SwiftUI
 import KeyboardKit
 
 class KeyboardViewController: KeyboardInputViewController {
     
     var recordButton: UIButton!
+    private var keyboardToggleButton: UIButton!
     private let coordinator = AppGroupCoordinator.shared
     private var recordingStatusTimer: Timer?
 
@@ -41,6 +43,48 @@ class KeyboardViewController: KeyboardInputViewController {
         recordingStatusTimer = nil
     }
     
+    // Height of the top control strip that holds the record + keyboard-toggle
+    // buttons (overlaid in UIKit). The expanded keyboard is inset below it.
+    private let controlStripHeight: CGFloat = 44
+
+    // Lazy keyboard: default is a compact record bar that opens instantly.
+    // The full QWERTY (KeyboardKit's `KeyboardView`) is only rendered when the
+    // user taps the keyboard-toggle button to edit dictated text. Building the
+    // full `SystemKeyboard` on every open was the source of the open-lag.
+    private var isKeyboardExpanded = false
+
+    override func viewWillSetupKeyboardView() {
+        installKeyboardView()
+    }
+
+    // Swaps the SwiftUI content between the compact placeholder and the full
+    // keyboard. Safe to call again at runtime to toggle expansion.
+    private func installKeyboardView() {
+        if isKeyboardExpanded {
+            let stripHeight = controlStripHeight
+            setupKeyboardView { controller in
+                // Reuse KeyboardView's toolbar slot as the control strip the
+                // UIKit record/toggle buttons overlay. This avoids stacking a
+                // separate strip ON TOP of the (empty) autocomplete toolbar,
+                // which was the source of the large gap above the keys.
+                KeyboardView(
+                    state: controller.state,
+                    services: controller.services,
+                    buttonContent: { $0.view },
+                    buttonView: { $0.view },
+                    collapsedView: { $0.view },
+                    emojiKeyboard: { $0.view },
+                    toolbar: { _ in Color.clear.frame(height: stripHeight) }
+                )
+            }
+        } else {
+            let stripHeight = controlStripHeight
+            setupKeyboardView { _ in
+                Color.clear.frame(height: stripHeight)
+            }
+        }
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         setupKeyboard()
@@ -86,9 +130,56 @@ class KeyboardViewController: KeyboardInputViewController {
     private func setupKeyboard() {
         // Setup KeyboardKit with default configuration
         setupKeyboardKit()
-        
+
         // Add our custom record button at the top
         setupRecordButton()
+
+        // Add the keyboard-toggle button next to the record button
+        setupKeyboardToggleButton()
+    }
+
+    private func setupKeyboardToggleButton() {
+        keyboardToggleButton = UIButton(type: .system)
+        keyboardToggleButton.translatesAutoresizingMaskIntoConstraints = false
+        keyboardToggleButton.addTarget(self, action: #selector(keyboardToggleTapped), for: .touchUpInside)
+        keyboardToggleButton.backgroundColor = UIColor.secondarySystemBackground
+        keyboardToggleButton.tintColor = .label
+        keyboardToggleButton.layer.borderWidth = 0.5
+        keyboardToggleButton.layer.borderColor = UIColor.separator.cgColor
+
+        view.addSubview(keyboardToggleButton)
+        NSLayoutConstraint.activate([
+            keyboardToggleButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -12),
+            keyboardToggleButton.centerYAnchor.constraint(equalTo: recordButton.centerYAnchor),
+            keyboardToggleButton.heightAnchor.constraint(equalToConstant: 32),
+            keyboardToggleButton.widthAnchor.constraint(equalToConstant: 40)
+        ])
+
+        updateKeyboardToggleAppearance()
+    }
+
+    private func updateKeyboardToggleAppearance() {
+        guard let button = keyboardToggleButton else { return }
+        let config = UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
+        let symbol = isKeyboardExpanded ? "keyboard.chevron.compact.down" : "keyboard"
+        button.setImage(UIImage(systemName: symbol, withConfiguration: config), for: .normal)
+        button.layer.cornerRadius = 16
+    }
+
+    @objc private func keyboardToggleTapped() {
+        let impactFeedback = UIImpactFeedbackGenerator(style: .light)
+        impactFeedback.impactOccurred()
+
+        isKeyboardExpanded.toggle()
+        installKeyboardView()
+        updateKeyboardToggleAppearance()
+
+        // Keep the overlay controls on top of the freshly-installed view
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if let b = self.recordButton { self.view.bringSubviewToFront(b) }
+            if let t = self.keyboardToggleButton { self.view.bringSubviewToFront(t) }
+        }
     }
     
     private func setupKeyboardKit() {
@@ -138,9 +229,10 @@ class KeyboardViewController: KeyboardInputViewController {
         // Add button to main view
         view.addSubview(recordButton)
         
-        // Set up constraints - position in top center with safe margins
+        // Pin the record button to the LEFT edge so it's far from the
+        // keyboard-toggle button on the right (avoids mis-taps).
         NSLayoutConstraint.activate([
-            recordButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            recordButton.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
             recordButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 6),
             recordButton.heightAnchor.constraint(equalToConstant: 32),
             recordButton.widthAnchor.constraint(greaterThanOrEqualToConstant: 120)
@@ -193,13 +285,18 @@ class KeyboardViewController: KeyboardInputViewController {
                 view.addSubview(button)
             }
             view.bringSubviewToFront(button)
-            
+
             // Ensure proper capsule shape after layout
             DispatchQueue.main.async {
                 button.layer.cornerRadius = button.frame.height / 2
             }
         } else {
             // no-op
+        }
+
+        if let toggle = keyboardToggleButton {
+            if toggle.superview == nil { view.addSubview(toggle) }
+            view.bringSubviewToFront(toggle)
         }
     }
 
@@ -218,9 +315,15 @@ class KeyboardViewController: KeyboardInputViewController {
         // Ensure button is still visible after layout
         if let button = recordButton {
             view.bringSubviewToFront(button)
-            
+
             // Make button fully capsule-shaped based on its actual height
             button.layer.cornerRadius = button.frame.height / 2
+        }
+
+        // Keyboard-toggle button also stays on top of the installed view
+        if let toggle = keyboardToggleButton {
+            if toggle.superview == nil { view.addSubview(toggle) }
+            view.bringSubviewToFront(toggle)
         }
     }
     
