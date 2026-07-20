@@ -122,6 +122,26 @@ struct ModeConfigurationView: View {
                     }
                 }
             }
+
+            if mode.isPostProcessingEnabled {
+                Section(header: Text("Fallback Models"),
+                        footer: Text("Tried in order when the primary model fails or times out. Cross-provider fallbacks survive a whole-provider outage.")) {
+                    ForEach(fallbacks.indices, id: \.self) { index in
+                        fallbackRow(at: index)
+                    }
+                    .onDelete { offsets in
+                        var list = fallbacks
+                        list.remove(atOffsets: offsets)
+                        mode.postProcessingFallbacks = list.isEmpty ? nil : list
+                    }
+
+                    if fallbacks.count < 3 {
+                        Button("Add Fallback Model") {
+                            addFallback()
+                        }
+                    }
+                }
+            }
         }
         .navigationTitle(isEditing ? "Edit Mode" : "New Mode")
         .navigationBarTitleDisplayMode(.inline)
@@ -181,6 +201,84 @@ struct ModeConfigurationView: View {
             models.insert(current, at: 0)
         }
         return models
+    }
+
+    // MARK: - Post-processing fallbacks
+
+    private var fallbacks: [PostProcessingFallback] {
+        mode.postProcessingFallbacks ?? []
+    }
+
+    private func fallbackBinding(at index: Int) -> Binding<PostProcessingFallback> {
+        Binding(
+            get: {
+                let list = fallbacks
+                guard index < list.count else { return PostProcessingFallback(provider: .groq, model: "") }
+                return list[index]
+            },
+            set: { newValue in
+                var list = fallbacks
+                guard index < list.count else { return }
+                list[index] = newValue
+                mode.postProcessingFallbacks = list
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func fallbackRow(at index: Int) -> some View {
+        let binding = fallbackBinding(at: index)
+        // Provider changes reset the model inside the setter (not onChange):
+        // index-based onChange misfires when a deleted row shifts indices,
+        // clobbering an unrelated row's saved model
+        let providerBinding = Binding<Provider>(
+            get: { binding.wrappedValue.provider },
+            set: { newProvider in
+                guard newProvider != binding.wrappedValue.provider else { return }
+                binding.wrappedValue = PostProcessingFallback(provider: newProvider, model: defaultModel(for: newProvider))
+            }
+        )
+        VStack {
+            Picker("Fallback \(index + 1)", selection: providerBinding) {
+                ForEach(availablePostProcessingProviders) { provider in
+                    Text(provider.rawValue).tag(provider)
+                }
+            }
+
+            if binding.wrappedValue.provider == .voiceink {
+                HStack {
+                    Text("Model")
+                    Spacer()
+                    Text(settings.voiceInkPostProcessingModel())
+                        .foregroundColor(.secondary)
+                }
+            } else {
+                Picker("Model", selection: binding.model) {
+                    ForEach(modelOptions(for: binding.wrappedValue.provider, type: .postProcessing, current: binding.wrappedValue.model), id: \.self) { model in
+                        Text(model).tag(model)
+                    }
+                }
+            }
+        }
+    }
+
+    private func addFallback() {
+        // Prefer a provider different from the primary so the fallback
+        // survives a provider outage
+        let provider = availablePostProcessingProviders.first { $0 != mode.postProcessingProvider }
+            ?? mode.postProcessingProvider
+        var list = fallbacks
+        list.append(PostProcessingFallback(provider: provider, model: defaultModel(for: provider)))
+        mode.postProcessingFallbacks = list
+    }
+
+    private func defaultModel(for provider: Provider) -> String {
+        if provider == .voiceink {
+            return settings.voiceInkPostProcessingModel()
+        }
+        return catalog.models(for: provider, type: .postProcessing).first
+            ?? provider.models(for: .postProcessing).first
+            ?? ""
     }
 }
 

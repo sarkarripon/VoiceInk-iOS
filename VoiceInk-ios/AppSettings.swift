@@ -284,6 +284,25 @@ final class AppSettings: ObservableObject {
         }
     }
     
+    /// Get the effective post-processing fallback models (from selected mode or first mode).
+    /// VoiceInk-provider entries resolve to the current server-side model at
+    /// read time so a stored snapshot can never go stale.
+    var effectivePostProcessingFallbacks: [PostProcessingFallback] {
+        let stored: [PostProcessingFallback]
+        if let selectedMode = selectedMode {
+            stored = selectedMode.postProcessingFallbacks ?? []
+        } else if let firstMode = modes.first {
+            stored = firstMode.postProcessingFallbacks ?? []
+        } else {
+            stored = []
+        }
+        return stored.map { fallback in
+            fallback.provider == .voiceink
+                ? PostProcessingFallback(provider: .voiceink, model: voiceInkPostProcessingModel())
+                : fallback
+        }
+    }
+
     /// Get the effective custom prompt (from selected mode or first mode)
     var effectiveCustomPrompt: String {
         if let selectedMode = selectedMode {

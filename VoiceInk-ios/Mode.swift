@@ -1,5 +1,14 @@
 import Foundation
 
+/// A provider+model pair to try when the primary post-processing model fails.
+/// Cross-provider so a whole-provider outage can be survived.
+struct PostProcessingFallback: Codable, Hashable, Identifiable {
+    var provider: Provider
+    var model: String
+
+    var id: String { "\(provider.rawValue)/\(model)" }
+}
+
 struct Mode: Identifiable, Codable {
     let id: UUID
     var name: String
@@ -15,6 +24,8 @@ struct Mode: Identifiable, Codable {
     var isPostProcessingEnabled: Bool
     var postProcessingProvider: Provider
     var postProcessingModel: String
+    /// Optional so modes stored before this field decode as nil (no fallbacks)
+    var postProcessingFallbacks: [PostProcessingFallback]?
     var promptTemplate: PromptTemplate
     
     init(name: String,
@@ -33,6 +44,7 @@ struct Mode: Identifiable, Codable {
         self.isPostProcessingEnabled = isPostProcessingEnabled
         self.postProcessingProvider = postProcessingProvider
         self.postProcessingModel = postProcessingModel ?? postProcessingProvider.models(for: .postProcessing).first ?? "llama-3.1-8b-instant"
+        self.postProcessingFallbacks = nil
         self.promptTemplate = promptTemplate ?? PromptTemplate(type: .summary)
     }
     

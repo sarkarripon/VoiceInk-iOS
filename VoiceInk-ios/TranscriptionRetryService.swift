@@ -62,24 +62,34 @@ class TranscriptionRetryService {
             .replacingOccurrences(of: "[ \t]+", with: " ", options: .regularExpression)
         
         var finalText = cleanedText
-        
-        // Optional post-processing
+        var usedPostProcessingModel: String? = nil
+
+        // Optional post-processing with cross-provider fallbacks
         var postProcessingError: String? = nil
         if await settings.effectiveIsPostProcessingEnabled {
             let ppPrompt = await settings.effectiveCustomPrompt
             if !ppPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                let llmProvider = await settings.effectivePostProcessingProvider
-                let llmKey = await settings.apiKey(for: llmProvider)
-                let llmModel = await settings.effectivePostProcessingModel
-                if !llmKey.isEmpty {
+                // Snapshot MainActor-isolated settings once, then run the chain
+                let (candidates, apiKeys) = await MainActor.run { () -> ([PostProcessingCandidate], [Provider: String]) in
+                    let candidates = PostProcessingFailover.candidates(
+                        primaryProvider: settings.effectivePostProcessingProvider,
+                        primaryModel: settings.effectivePostProcessingModel,
+                        fallbacks: settings.effectivePostProcessingFallbacks,
+                        apiKeyLookup: { settings.apiKey(for: $0) }
+                    )
+                    let keys = Dictionary(uniqueKeysWithValues: candidates.map { ($0.provider, settings.apiKey(for: $0.provider)) })
+                    return (candidates, keys)
+                }
+                if !candidates.isEmpty {
                     do {
-                        finalText = try await postProcessor.postProcessTranscript(
-                            provider: llmProvider,
-                            apiKey: llmKey,
-                            model: llmModel,
+                        let result = try await postProcessor.postProcessTranscript(
+                            candidates: candidates,
+                            apiKeyLookup: { apiKeys[$0] ?? "" },
                             prompt: ppPrompt,
                             transcript: cleanedText
                         )
+                        finalText = result.text
+                        usedPostProcessingModel = result.used.model
                     } catch {
                         // Post-processing failed, but transcription succeeded
                         postProcessingError = "Post-processing failed: \(error.localizedDescription)"
@@ -89,13 +99,14 @@ class TranscriptionRetryService {
                 }
             }
         }
-        
+
         // Update note
         note.text = cleanedText
         note.enhancedText = (finalText == cleanedText) ? nil : finalText
         note.transcriptionModelName = model
         if await settings.effectiveIsPostProcessingEnabled {
-            note.aiEnhancementModelName = await settings.effectivePostProcessingModel
+            let defaultModel = await settings.effectivePostProcessingModel
+            note.aiEnhancementModelName = usedPostProcessingModel ?? defaultModel
         }
         note.transcriptionStatus = .completed
         note.transcriptionError = postProcessingError

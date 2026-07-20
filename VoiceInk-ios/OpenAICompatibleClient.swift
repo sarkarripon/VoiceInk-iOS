@@ -16,8 +16,8 @@ struct OpenAICompatibleClient {
         } catch { return false }
     }
 
-    func chatCompletion(baseURL: URL, apiKey: String, model: String, messages: [OAChatMessage], temperature: Double? = 0.2) async throws -> String {
-        var request = URLRequest(url: baseURL.appendingPathComponent("/v1/chat/completions"))
+    func chatCompletion(baseURL: URL, apiKey: String, model: String, messages: [OAChatMessage], temperature: Double? = 0.2, timeout: TimeInterval = 60) async throws -> String {
+        var request = URLRequest(url: baseURL.appendingPathComponent("/v1/chat/completions"), timeoutInterval: timeout)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")

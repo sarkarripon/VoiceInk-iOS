@@ -405,18 +405,29 @@ final class RecordingManager: ObservableObject {
                 var finalText = cleanedText
                 var enhancedText: String? = nil
                 var postProcessingError: String? = nil
-                
-                // Optional post-processing
+                var usedPostProcessingModel: String? = nil
+
+                // Optional post-processing with cross-provider fallbacks
                 if settings.effectiveIsPostProcessingEnabled {
                     let ppPrompt = settings.effectiveCustomPrompt
                     if !ppPrompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        let llmProvider = settings.effectivePostProcessingProvider
-                        let llmKey = settings.apiKey(for: llmProvider)
-                        let llmModel = settings.effectivePostProcessingModel
-                        if !llmKey.isEmpty {
+                        let candidates = PostProcessingFailover.candidates(
+                            primaryProvider: settings.effectivePostProcessingProvider,
+                            primaryModel: settings.effectivePostProcessingModel,
+                            fallbacks: settings.effectivePostProcessingFallbacks,
+                            apiKeyLookup: { settings.apiKey(for: $0) }
+                        )
+                        if !candidates.isEmpty {
                             do {
-                                finalText = try await postProcessor.postProcessTranscript(provider: llmProvider, apiKey: llmKey, model: llmModel, prompt: ppPrompt, transcript: cleanedText)
-                                enhancedText = finalText
+                                let result = try await postProcessor.postProcessTranscript(
+                                    candidates: candidates,
+                                    apiKeyLookup: { settings.apiKey(for: $0) },
+                                    prompt: ppPrompt,
+                                    transcript: cleanedText
+                                )
+                                finalText = result.text
+                                enhancedText = result.text
+                                usedPostProcessingModel = result.used.model
                             } catch {
                                 postProcessingError = "Post-processing failed: \(error.localizedDescription)"
                                 finalText = cleanedText
@@ -430,7 +441,7 @@ final class RecordingManager: ObservableObject {
                     note.text = cleanedText
                     note.enhancedText = enhancedText
                     note.transcriptionModelName = model
-                    note.aiEnhancementModelName = settings.effectiveIsPostProcessingEnabled ? settings.effectivePostProcessingModel : nil
+                    note.aiEnhancementModelName = usedPostProcessingModel ?? (settings.effectiveIsPostProcessingEnabled ? settings.effectivePostProcessingModel : nil)
                     note.transcriptionStatus = .completed
                     note.transcriptionError = postProcessingError
                     try? modelContext.save()

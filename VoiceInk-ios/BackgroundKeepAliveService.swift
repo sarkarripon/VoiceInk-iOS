@@ -101,8 +101,10 @@ final class BackgroundKeepAliveService {
         idleTimer = Timer.scheduledTimer(withTimeInterval: TimeInterval(seconds), repeats: false) { _ in
             Task { @MainActor in
                 let service = BackgroundKeepAliveService.shared
-                guard service.isActive, !service.isCapturing else {
-                    service.noteActivity() // recording in flight - re-arm
+                guard service.isActive,
+                      !service.isCapturing,
+                      !AppGroupCoordinator.shared.isProcessing else {
+                    service.noteActivity() // recording or transcription pipeline in flight - re-arm
                     return
                 }
                 AppGroupCoordinator.shared.appendDiag("APP: hibernating after \(seconds)s idle")
