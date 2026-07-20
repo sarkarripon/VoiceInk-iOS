@@ -194,6 +194,9 @@ class LocalModelManager: ObservableObject {
         do {
             try FileManager.default.removeItem(at: model.fileURL)
             print("LocalModelManager: Successfully deleted model \(model.name)")
+
+            // Drop any cached in-memory context for the deleted model
+            Task { await WhisperContextCache.shared.releaseAll() }
             
             // Trigger UI update
             DispatchQueue.main.async {

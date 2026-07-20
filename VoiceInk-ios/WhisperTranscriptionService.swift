@@ -47,16 +47,16 @@ struct WhisperTranscriptionService: TranscriptionService {
         }
         
         print("WhisperTranscriptionService: Using model at \(modelPath)")
-        
-        // Load Whisper context
+
+        // Load Whisper context (cached across transcriptions; the cache logs load time)
         let context: WhisperContext
         do {
-            context = try await WhisperContext.createContext(path: modelPath)
+            context = try await WhisperContextCache.shared.context(for: modelPath)
         } catch {
             print("WhisperTranscriptionService: Failed to load model: \(error)")
             throw WhisperTranscriptionError.modelLoadFailed
         }
-        
+
         // Process audio file (expecting WAV format from recorder)
         let audioSamples: [Float]
         do {
@@ -64,29 +64,17 @@ struct WhisperTranscriptionService: TranscriptionService {
             print("WhisperTranscriptionService: Processed \(audioSamples.count) audio samples")
         } catch {
             print("WhisperTranscriptionService: Audio processing failed: \(error)")
-            // Clean up resources before throwing
-            await context.releaseResources()
-            print("WhisperTranscriptionService: Whisper context resources released.")
             throw WhisperTranscriptionError.audioProcessingFailed
         }
-        
-        // Perform transcription
-        let success = await context.fullTranscribe(samples: audioSamples)
-        
-        if success {
-            let transcription = await context.getTranscription()
-            // Clean up resources
-            await context.releaseResources()
-            print("WhisperTranscriptionService: Whisper context resources released.")
-            print("WhisperTranscriptionService: Transcription completed successfully")
-            return transcription.isEmpty ? "No audio detected." : transcription
-        } else {
-            // Clean up resources before throwing error
-            await context.releaseResources()
-            print("WhisperTranscriptionService: Whisper context resources released.")
+
+        // Perform transcription; the context stays alive for the next request
+        guard let transcription = await context.transcribe(samples: audioSamples) else {
             print("WhisperTranscriptionService: Transcription failed")
             throw WhisperTranscriptionError.transcriptionFailed
         }
+
+        print("WhisperTranscriptionService: Transcription completed successfully")
+        return transcription.isEmpty ? "No audio detected." : transcription
     }
     
     /// Verify API key (not applicable for local transcription, always returns true if model is available)

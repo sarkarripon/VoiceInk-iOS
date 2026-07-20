@@ -17,6 +17,23 @@ enum WhisperError: Error {
     case couldNotInitializeContext
 }
 
+// Routes whisper.cpp / ggml log output (including Metal init results) into
+// os_log so it is visible in Console for on-device debugging.
+fileprivate let whisperCppLogger = Logger(subsystem: "com.prakashjoshipax.voiceink", category: "whisper.cpp")
+
+fileprivate let installWhisperLogHandler: Void = {
+    whisper_log_set({ level, text, _ in
+        guard let text else { return }
+        let message = String(cString: text).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty else { return }
+        if level == GGML_LOG_LEVEL_ERROR {
+            whisperCppLogger.error("\(message)")
+        } else {
+            whisperCppLogger.info("\(message)")
+        }
+    }, nil)
+}()
+
 // Meet Whisper C++ constraint: Don't access from more than one thread at a time.
 actor WhisperContext {
     private var context: OpaquePointer?
@@ -75,14 +92,29 @@ actor WhisperContext {
         }
         
         var success = true
+        let start = CFAbsoluteTimeGetCurrent()
         samples.withUnsafeBufferPointer { samplesBuffer in
             if whisper_full(context, params, samplesBuffer.baseAddress, Int32(samplesBuffer.count)) != 0 {
                 logger.error("Failed to run whisper_full. VAD enabled: \(params.vad)")
                 success = false
             }
         }
-        
+        if success {
+            let elapsed = CFAbsoluteTimeGetCurrent() - start
+            let audioSeconds = Double(samples.count) / 16000.0
+            let factor = elapsed > 0 ? audioSeconds / elapsed : 0
+            logger.info("Transcribed \(String(format: "%.1f", audioSeconds))s audio in \(Int(elapsed * 1000)) ms (\(String(format: "%.1f", factor))x realtime, \(maxThreads) threads)")
+        }
+
         return success
+    }
+
+    /// Runs transcription and returns the text in one actor call so that
+    /// concurrent requests on a shared context cannot interleave
+    /// fullTranscribe/getTranscription pairs.
+    func transcribe(samples: [Float]) -> String? {
+        guard fullTranscribe(samples: samples) else { return nil }
+        return getTranscription()
     }
 
     func getTranscription() -> String {
@@ -110,6 +142,8 @@ actor WhisperContext {
     }
     
     private func initializeModel(path: String) throws {
+        _ = installWhisperLogHandler
+        let start = CFAbsoluteTimeGetCurrent()
         var params = whisper_context_default_params()
         #if targetEnvironment(simulator)
         params.use_gpu = false
@@ -122,6 +156,8 @@ actor WhisperContext {
         let context = whisper_init_from_file_with_params(path, params)
         if let context {
             self.context = context
+            let elapsed = (CFAbsoluteTimeGetCurrent() - start) * 1000
+            logger.info("whisper_init (model read + Metal setup) took \(Int(elapsed)) ms")
         } else {
             logger.error("Couldn't load model at \(path)")
             throw WhisperError.couldNotInitializeContext

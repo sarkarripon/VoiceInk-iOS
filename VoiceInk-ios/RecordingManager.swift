@@ -178,6 +178,13 @@ final class RecordingManager: ObservableObject {
         recordingState = .recording
         animate = true
 
+        // Prewarm local Whisper while the user is still speaking so the
+        // model is loaded (and Metal shaders compiled) before recording stops
+        if settings.effectiveTranscriptionProvider == .local,
+           let modelPath = LocalModelManager.shared.baseModelPath {
+            WhisperContextCache.shared.prewarm(path: modelPath)
+        }
+
         // Auto-select first mode if none is selected
         if settings.selectedModeId == nil && !settings.modes.isEmpty {
             settings.selectedModeId = settings.modes.first?.id
