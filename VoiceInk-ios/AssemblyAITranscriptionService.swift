@@ -25,7 +25,7 @@ struct AssemblyAITranscriptStatusResponse: Decodable {
 struct AssemblyAITranscriptionService: TranscriptionService {
     // Batch flow: upload audio -> create transcript -> poll until completed.
 
-    private static let pollIntervalNanoseconds: UInt64 = 1_000_000_000
+    private static let pollIntervalNanoseconds: UInt64 = 250_000_000
     private static let maxWaitSeconds: TimeInterval = 300
     private static let uploadTimeoutSeconds: TimeInterval = 300
     private static let requestTimeoutSeconds: TimeInterval = 30
@@ -110,6 +110,17 @@ struct AssemblyAITranscriptionService: TranscriptionService {
                 ])
             }
             try await Task.sleep(nanoseconds: Self.pollIntervalNanoseconds)
+        }
+    }
+
+    /// Fire-and-forget request that opens the TLS connection on the shared
+    /// session while the user is still recording, so a later upload skips the
+    /// DNS + handshake cost (~1-2s on cellular). Any response, even 401, is fine.
+    static func prewarmConnection(apiBaseURL: URL) {
+        Task.detached(priority: .utility) {
+            var request = URLRequest(url: apiBaseURL, timeoutInterval: 10)
+            request.httpMethod = "HEAD"
+            _ = try? await session.data(for: request)
         }
     }
 

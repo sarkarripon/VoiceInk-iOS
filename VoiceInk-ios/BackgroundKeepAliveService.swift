@@ -39,6 +39,12 @@ final class BackgroundKeepAliveService {
     private var captureURL: URL?
     private var captureStartTime: Date?
 
+    // Live streaming transcription: while capturing, buffers are also
+    // converted to 16 kHz PCM16 mono and handed to this callback (websocket
+    // sender). Touch only on captureQueue.
+    private var streamHandler: ((Data) -> Void)?
+    private var streamConverter: AVAudioConverter?
+
     var isCapturing: Bool { captureQueue.sync { captureFile != nil } }
 
     private init() {}
@@ -180,6 +186,10 @@ final class BackgroundKeepAliveService {
                     } catch {
                         print("⚠️ Capture write failed: \(error.localizedDescription)")
                     }
+                    if let handler = self.streamHandler,
+                       let chunk = self.convertToStreamingPCM(buffer) {
+                        handler(chunk)
+                    }
                 }
             }
         }
@@ -242,6 +252,55 @@ final class BackgroundKeepAliveService {
         }
         captureURL = nil
         captureStartTime = nil
+    }
+
+    /// Install (or clear) the live streaming chunk consumer. Chunks are only
+    /// forwarded while a file capture is active.
+    func setStreamHandler(_ handler: ((Data) -> Void)?) {
+        captureQueue.async {
+            self.streamHandler = handler
+            if handler == nil {
+                self.streamConverter = nil
+            }
+        }
+    }
+
+    /// Convert a tap buffer (hardware format) to 16 kHz PCM16 mono LE for the
+    /// streaming websocket. Runs on captureQueue; the converter persists
+    /// across buffers so the resampler keeps its filter state.
+    private func convertToStreamingPCM(_ buffer: AVAudioPCMBuffer) -> Data? {
+        guard let outFormat = AVAudioFormat(
+            commonFormat: .pcmFormatInt16,
+            sampleRate: 16_000,
+            channels: 1,
+            interleaved: true
+        ) else { return nil }
+
+        if streamConverter == nil || streamConverter?.inputFormat != buffer.format {
+            streamConverter = AVAudioConverter(from: buffer.format, to: outFormat)
+        }
+        guard let converter = streamConverter else { return nil }
+
+        let ratio = 16_000.0 / buffer.format.sampleRate
+        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 32
+        guard let out = AVAudioPCMBuffer(pcmFormat: outFormat, frameCapacity: capacity) else { return nil }
+
+        var fed = false
+        var conversionError: NSError?
+        let status = converter.convert(to: out, error: &conversionError) { _, inputStatus in
+            if fed {
+                inputStatus.pointee = .noDataNow
+                return nil
+            }
+            fed = true
+            inputStatus.pointee = .haveData
+            return buffer
+        }
+
+        guard status != .error, out.frameLength > 0, let channel = out.int16ChannelData else {
+            return nil
+        }
+        return Data(bytes: channel[0], count: Int(out.frameLength) * MemoryLayout<Int16>.size)
     }
 
     private var silenceFormat: AVAudioFormat {

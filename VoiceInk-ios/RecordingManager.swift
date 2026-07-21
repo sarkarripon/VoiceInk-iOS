@@ -65,6 +65,11 @@ final class RecordingManager: ObservableObject {
     /// Non-nil while recording through the keep-alive engine's live input tap
     /// (the only mic path that can START while the app is in the background)
     private var engineCaptureURL: URL?
+
+    /// Non-nil while a live websocket transcription runs alongside the engine
+    /// capture; at stop the final text is taken from here instead of the
+    /// upload+poll batch path (which stays as the fallback)
+    private var streamingSession: StreamingSession?
     
     var isRecording: Bool {
         recordingState == .recording
@@ -198,8 +203,15 @@ final class RecordingManager: ObservableObject {
                 let url = AudioRecorder.recordingsDirectory().appendingPathComponent(filename)
                 try BackgroundKeepAliveService.shared.startCapture(to: url)
                 engineCaptureURL = url
+                startStreamingIfEligible()
             } else {
                 try recorder.startRecording()
+            }
+            // Open the TLS connection to the batch API while the user is
+            // still talking so an upload (or streaming fallback) doesn't pay
+            // the handshake after stop
+            if settings.effectiveTranscriptionProvider == .assemblyai {
+                AssemblyAITranscriptionService.prewarmConnection(apiBaseURL: settings.effectiveTranscriptionProvider.baseURL)
             }
             // Publish cross-process state only once recording is truly active
             coordinator.updateRecordingState(true)
@@ -217,14 +229,53 @@ final class RecordingManager: ObservableObject {
         }
     }
     
+    /// Start a live websocket transcription alongside the engine capture when
+    /// the current provider/model supports it. Failure is silent: the batch
+    /// upload path remains as fallback and the WAV is written regardless.
+    private func startStreamingIfEligible() {
+        let provider = settings.effectiveTranscriptionProvider
+        let model = settings.effectiveTranscriptionModel
+        let apiKey = settings.apiKey(for: provider)
+        guard provider == .assemblyai, model == "universal-3-5-pro", !apiKey.isEmpty else { return }
+
+        let session = StreamingSession()
+        streamingSession = session
+        // Chunks queued before the socket is up are buffered inside the session
+        BackgroundKeepAliveService.shared.setStreamHandler { data in
+            session.sendAudioChunk(data)
+        }
+
+        let language = settings.effectiveTranscriptionLanguage
+        Task { [weak self] in
+            do {
+                try await session.connect(apiKey: apiKey, model: model, language: language)
+            } catch {
+                print("⚠️ Streaming connect failed, batch fallback armed: \(error.localizedDescription)")
+                await MainActor.run {
+                    guard let self, self.streamingSession === session else { return }
+                    self.streamingSession = nil
+                    BackgroundKeepAliveService.shared.setStreamHandler(nil)
+                }
+            }
+        }
+    }
+
     func stopRecording(modelContext: ModelContext) {
         // Stop recording and get file info
         stopDurationTimer()
 
+        let activeStreamingSession = streamingSession
+        streamingSession = nil
+
         let stoppedFileURL: URL?
         if engineCaptureURL != nil {
+            // Stop the file capture first (chunk forwarding is gated on it),
+            // THEN detach the stream handler so the audio tail isn't dropped
             stoppedFileURL = BackgroundKeepAliveService.shared.stopCapture()?.url
             engineCaptureURL = nil
+            if activeStreamingSession != nil {
+                BackgroundKeepAliveService.shared.setStreamHandler(nil)
+            }
         } else {
             recorder.stopRecording()
             stoppedFileURL = recorder.currentRecordingURL
@@ -271,10 +322,15 @@ final class RecordingManager: ObservableObject {
         BackgroundKeepAliveService.shared.noteActivity()
 
         // Start background transcription
-        transcribeInBackground(note: note, audioFileName: audioFileName, recordingDuration: recordingDuration, modelContext: modelContext)
+        transcribeInBackground(note: note, audioFileName: audioFileName, recordingDuration: recordingDuration, modelContext: modelContext, streamingSession: activeStreamingSession)
     }
     
     func cancelRecording() {
+        if let session = streamingSession {
+            session.cancel()
+            streamingSession = nil
+            BackgroundKeepAliveService.shared.setStreamHandler(nil)
+        }
         if engineCaptureURL != nil {
             BackgroundKeepAliveService.shared.cancelCapture()
             engineCaptureURL = nil
@@ -340,7 +396,7 @@ final class RecordingManager: ObservableObject {
     }
     
     // MARK: - Transcription
-    private func transcribeInBackground(note: Transcription, audioFileName: String, recordingDuration: Double, modelContext: ModelContext) {
+    private func transcribeInBackground(note: Transcription, audioFileName: String, recordingDuration: Double, modelContext: ModelContext, streamingSession: StreamingSession? = nil) {
         // Capture NOW: a new recording may start while this transcription runs
         let publishToKeyboard = startedFromKeyboard
 
@@ -381,21 +437,38 @@ final class RecordingManager: ObservableObject {
                 let service = TranscriptionServiceFactory.service(for: provider)
                 let language = settings.effectiveTranscriptionLanguage
 
-                // Shrink the upload for cloud providers; local Whisper keeps the WAV
-                var uploadFileURL = fileURL
-                var temporaryUpload: URL? = nil
-                if provider != .local, let compressed = AudioUploadCompressor.compressForUpload(fileURL) {
-                    uploadFileURL = compressed
-                    temporaryUpload = compressed
-                }
-                defer {
-                    if let temporaryUpload {
-                        try? FileManager.default.removeItem(at: temporaryUpload)
+                let sttStart = Date()
+                var streamedText: String? = nil
+                if let streamingSession {
+                    let result = await streamingSession.stopAndFinalize()
+                    if case .finalized(let text) = result, !text.isEmpty {
+                        streamedText = text
+                    } else {
+                        print("⚠️ Streaming empty/failed - falling back to batch upload")
                     }
                 }
 
-                let rawText = try await service.transcribeAudioFile(apiBaseURL: provider.baseURL, apiKey: apiKey, model: model, fileURL: uploadFileURL, language: language)
-                
+                let rawText: String
+                if let streamedText {
+                    rawText = streamedText
+                } else {
+                    // Shrink the upload for cloud providers; local Whisper keeps the WAV
+                    var uploadFileURL = fileURL
+                    var temporaryUpload: URL? = nil
+                    if provider != .local, let compressed = AudioUploadCompressor.compressForUpload(fileURL) {
+                        uploadFileURL = compressed
+                        temporaryUpload = compressed
+                    }
+                    defer {
+                        if let temporaryUpload {
+                            try? FileManager.default.removeItem(at: temporaryUpload)
+                        }
+                    }
+
+                    rawText = try await service.transcribeAudioFile(apiBaseURL: provider.baseURL, apiKey: apiKey, model: model, fileURL: uploadFileURL, language: language)
+                }
+                let sttSeconds = Date().timeIntervalSince(sttStart)
+
                 // Clean up transcription
                 let cleanedText = rawText
                     .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -406,6 +479,7 @@ final class RecordingManager: ObservableObject {
                 var enhancedText: String? = nil
                 var postProcessingError: String? = nil
                 var usedPostProcessingModel: String? = nil
+                var enhanceSeconds: TimeInterval? = nil
 
                 // Optional post-processing with cross-provider fallbacks
                 if settings.effectiveIsPostProcessingEnabled {
@@ -419,12 +493,14 @@ final class RecordingManager: ObservableObject {
                         )
                         if !candidates.isEmpty {
                             do {
+                                let ppStart = Date()
                                 let result = try await postProcessor.postProcessTranscript(
                                     candidates: candidates,
                                     apiKeyLookup: { settings.apiKey(for: $0) },
                                     prompt: ppPrompt,
                                     transcript: cleanedText
                                 )
+                                enhanceSeconds = Date().timeIntervalSince(ppStart)
                                 finalText = result.text
                                 enhancedText = result.text
                                 usedPostProcessingModel = result.used.model
@@ -444,6 +520,8 @@ final class RecordingManager: ObservableObject {
                     note.aiEnhancementModelName = usedPostProcessingModel ?? (settings.effectiveIsPostProcessingEnabled ? settings.effectivePostProcessingModel : nil)
                     note.transcriptionStatus = .completed
                     note.transcriptionError = postProcessingError
+                    note.transcriptionDuration = sttSeconds
+                    note.enhancementDuration = enhanceSeconds
                     try? modelContext.save()
 
                     // Hand the finished text to the keyboard extension, but
